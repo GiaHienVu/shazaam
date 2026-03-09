@@ -206,7 +206,7 @@ func request(endpoint string) (int, string, error) {
 }
 
 func TrackInfo(url string) (*Track, error) {
-	re := regexp.MustCompile(`open\.download\.com\/(?:intl-.+\/)?track\/([a-zA-Z0-9]{22})(\?si=[a-zA-Z0-9]{16})?`)
+	re := regexp.MustCompile(`open\.spotify\.com\/(?:intl-.+\/)?track\/([a-zA-Z0-9]{22})(\?si=[a-zA-Z0-9]{16})?`)
 	matches := re.FindStringSubmatch(url)
 	if len(matches) <= 2 {
 		return nil, errors.New("invalid track URL")
@@ -342,13 +342,26 @@ func AlbumInfo(url string) ([]Track, error) {
 			Album:    "",
 		}).buildTrack())
 	}
-	saveTracksJSON(trackPath, tracks)
+	appendTracksJSONArray(trackPath, tracks)
 
 	return nil, nil
 }
 
-func saveTracksJSON(path string, tracks []Track) error {
-	f, err := os.Create(path) // overwrite
+func appendTracksJSONArray(path string, newTracks []Track) error {
+	// đọc file nếu có
+	var tracks []Track
+	if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
+		if err := json.Unmarshal(b, &tracks); err != nil {
+			return err
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	tracks = append(tracks, newTracks...)
+
+	// ghi lại (ghi đè)
+	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
