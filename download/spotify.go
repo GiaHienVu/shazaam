@@ -1,4 +1,4 @@
-package spotify
+package download
 
 import (
 	"bytes"
@@ -33,9 +33,7 @@ import (
 // 13.- buildTrack
 // 14.- pagination
 // 15.- proccessItems
-// CLIENT_ID="96026d7a2e3844a782626e9de78ee5d8"
-// SECRET="d2497d5cda6a410db854b88bccb570c1"
-// PORT="1212"
+
 const (
 	tokenURL        = "https://accounts.spotify.com/api/token"
 	cachedTokenPath = "token.json"
@@ -208,7 +206,7 @@ func request(endpoint string) (int, string, error) {
 }
 
 func TrackInfo(url string) (*Track, error) {
-	re := regexp.MustCompile(`open\.spotify\.com\/(?:intl-.+\/)?track\/([a-zA-Z0-9]{22})(\?si=[a-zA-Z0-9]{16})?`)
+	re := regexp.MustCompile(`open\.download\.com\/(?:intl-.+\/)?track\/([a-zA-Z0-9]{22})(\?si=[a-zA-Z0-9]{16})?`)
 	matches := re.FindStringSubmatch(url)
 	if len(matches) <= 2 {
 		return nil, errors.New("invalid track URL")
@@ -272,7 +270,7 @@ func (t *Track) buildTrack() *Track {
 }
 
 func PlayListInfo(url string) ([]Track, error) {
-	re := regexp.MustCompile(`open\.spotify\.com\/(?:intl-[a-zA-Z-]+\/)?playlist\/([a-zA-Z0-9]{22})(?:\?si=[a-zA-Z0-9]+)?`)
+	re := regexp.MustCompile(`open\.download\.com\/(?:intl-[a-zA-Z-]+\/)?playlist\/([a-zA-Z0-9]{22})(?:\?si=[a-zA-Z0-9]+)?`)
 	matches := re.FindStringSubmatch(url)
 	if len(matches) != 2 {
 		return nil, errors.New("invalid playlist URL")
@@ -300,23 +298,13 @@ func PlayListInfo(url string) ([]Track, error) {
 	return nil, nil
 }
 
-func PlayListInfo2(rawURL string) ([]Track, error) {
-	u := strings.TrimSpace(rawURL)
-
-	re := regexp.MustCompile(`(?:https?:\/\/)?open\.spotify\.com\/(?:intl-[a-zA-Z-]+\/)?albums\/([^?\/\s]+)`)
-	matches := re.FindStringSubmatch(u)
-
-	// debug để biết vì sao fail
-	fmt.Printf("rawURL=%q\n", rawURL)
-	fmt.Printf("trimmed=%q\n", u)
-	fmt.Printf("matches=%#v\n", matches)
-
-	if len(matches) < 2 {
-		return nil, fmt.Errorf("invalid album URL: %q", u)
+func AlbumInfo(url string) ([]Track, error) {
+	re := regexp.MustCompile(`open\.spotify\.com\/album\/([a-zA-Z0-9]{22})`)
+	matches := re.FindStringSubmatch(url)
+	if len(matches) != 2 {
+		return nil, errors.New("invalid album URL")
 	}
-
 	id := matches[1]
-	fmt.Println("album id:", id)
 
 	endpoint := fmt.Sprintf("https://api.spotify.com/v1/albums/%s/tracks", id)
 	statusCode, jsonResponse, err := request(endpoint)
@@ -326,20 +314,6 @@ func PlayListInfo2(rawURL string) ([]Track, error) {
 	if statusCode != 200 {
 		return nil, fmt.Errorf("non-200 status: %d body=%s", statusCode, jsonResponse)
 	}
-
-	//var result struct {
-	//	Name     string `json:"name"`
-	//	Duration int    `json:"duration_ms"`
-	//	Album    struct {
-	//		Name string `json:"name"`
-	//	} `json:"album"`
-	//	Artists []struct {
-	//		Name string `json:"name"`
-	//	} `json:"artists"`
-	//}
-	//if err := json.Unmarshal([]byte(jsonResponse), &result); err != nil {
-	//	return nil, err
-
 	var result struct {
 		Items []struct {
 			Name     string `json:"name"`

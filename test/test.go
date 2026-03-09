@@ -208,7 +208,7 @@ func request(endpoint string) (int, string, error) {
 }
 
 func TrackInfo(url string) (*Track, error) {
-	re := regexp.MustCompile(`open\.spotify\.com\/(?:intl-.+\/)?track\/([a-zA-Z0-9]{22})(\?si=[a-zA-Z0-9]{16})?`)
+	re := regexp.MustCompile(`open\.download\.com\/(?:intl-.+\/)?track\/([a-zA-Z0-9]{22})(\?si=[a-zA-Z0-9]{16})?`)
 	matches := re.FindStringSubmatch(url)
 	if len(matches) <= 2 {
 		return nil, errors.New("invalid track URL")
@@ -272,7 +272,7 @@ func (t *Track) buildTrack() *Track {
 }
 
 func PlayListInfo(url string) ([]Track, error) {
-	re := regexp.MustCompile(`open\.spotify\.com\/(?:intl-[a-zA-Z-]+\/)?playlist\/([a-zA-Z0-9]{22})(?:\?si=[a-zA-Z0-9]+)?`)
+	re := regexp.MustCompile(`open\.download\.com\/(?:intl-[a-zA-Z-]+\/)?playlist\/([a-zA-Z0-9]{22})(?:\?si=[a-zA-Z0-9]+)?`)
 	matches := re.FindStringSubmatch(url)
 	if len(matches) != 2 {
 		return nil, errors.New("invalid playlist URL")
@@ -303,7 +303,7 @@ func PlayListInfo(url string) ([]Track, error) {
 func PlayListInfo2(rawURL string) ([]Track, error) {
 	u := strings.TrimSpace(rawURL)
 
-	re := regexp.MustCompile(`(?:https?:\/\/)?open\.spotify\.com\/(?:intl-[a-zA-Z-]+\/)?albums\/([^?\/\s]+)`)
+	re := regexp.MustCompile(`(?:https?:\/\/)?open\.download\.com\/(?:intl-[a-zA-Z-]+\/)?albums\/([^?\/\s]+)`)
 	matches := re.FindStringSubmatch(u)
 
 	// debug để biết vì sao fail

@@ -1,6 +1,6 @@
 package main
 
-func download(spotifyURL string) {
+func handle(spotifyURL string) {
 	// If URL contains Track
 
 	// If URL contains Album
