@@ -44,6 +44,7 @@ type Track struct {
 	Title, Artist, Album string
 	Artists              []string
 	Duration             int
+	YoutubeURL           string
 }
 
 type credentials struct {

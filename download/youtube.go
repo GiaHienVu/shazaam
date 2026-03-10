@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -31,6 +33,7 @@ Output: file mp3
 //		} `json:"items"`
 //	}
 const durationMatchThreshold = 5
+const audioFormat = "wav"
 
 type MetadataSongYoutube struct {
 	Title      string
@@ -56,16 +59,16 @@ type ytVideosResp struct {
 	} `json:"items"`
 }
 
-func GetYoutubeURL(track Track) (int, MetadataSongYoutube, error) {
+func GetYoutubeURL(track Track) error {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found or failed to load")
 	}
 	key := os.Getenv("YOUTUBE_APIKEY")
 	if key == "" {
-		return 0, MetadataSongYoutube{}, fmt.Errorf("Key is blank")
+		return fmt.Errorf("Key is blank")
 	}
 	if track.Artists[0] == "" || track.Title == "" {
-		return 0, MetadataSongYoutube{}, fmt.Errorf("Song title or artist name is blank")
+		return fmt.Errorf("Song title or artist name is blank")
 	}
 	query := track.Artists[0] + " " + track.Title
 	limit := 10
@@ -78,26 +81,26 @@ func GetYoutubeURL(track Track) (int, MetadataSongYoutube, error) {
 
 	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
-		return 0, MetadataSongYoutube{}, fmt.Errorf("error on making the request")
+		return fmt.Errorf("error on making the request")
 	}
 
 	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
-		return resp.StatusCode, MetadataSongYoutube{}, fmt.Errorf("error on getting response: %w", err)
+		return fmt.Errorf("error on getting response: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return resp.StatusCode, MetadataSongYoutube{}, fmt.Errorf("youtube search failed: status=%d body=%s", resp.StatusCode, "")
+		return fmt.Errorf("youtube search failed: status=%d body=%s", resp.StatusCode, "")
 	}
 	body, err := io.ReadAll(resp.Body) // <-- body lấy ở đây
 	if err != nil {
-		return resp.StatusCode, MetadataSongYoutube{}, err
+		return err
 	}
 
 	videoIDs := ExtractVideoIDsFromSearchResponse(body)
 	if err != nil {
-		return resp.StatusCode, MetadataSongYoutube{}, err
+		return err
 	}
 
 	_, videoIDsWithDuration, _ := FetchVideosContentDetails(key, videoIDs)
@@ -113,10 +116,13 @@ func GetYoutubeURL(track Track) (int, MetadataSongYoutube, error) {
 		}
 		if resultSongDuration >= allowedDurationRangeStart && resultSongDuration <= allowedDurationRangeEnd {
 			fmt.Println("INFO: ", fmt.Sprintf("Found song with id '%s'", item.ID))
+			track.YoutubeURL = "https://www.youtube.com/watch?v=" + item.ID
+			break
 		}
 	}
-	//convertStringDurationToSeconds
-	return 0, MetadataSongYoutube{}, fmt.Errorf("copy body: %w", err)
+	url12, _ := DownloadAudio(track.YoutubeURL)
+	fmt.Println(url12)
+	return fmt.Errorf("No song founded: %w", err)
 
 }
 
@@ -209,4 +215,45 @@ func parseISO8601DurationSeconds(s string) (int, error) {
 	min := toInt(m[2])
 	sec := toInt(m[3])
 	return h*3600 + min*60 + sec, nil
+}
+
+func DownloadAudio(videoURL string) (string, error) {
+	outDir := "out_audio"
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return "", err
+	}
+
+	// base output path
+	outPath := filepath.Join(outDir, "song."+audioFormat)
+
+	// nếu tồn tại thì thêm _1, _2... để không đè
+	if _, err := os.Stat(outPath); err == nil {
+		ext := filepath.Ext(outPath)
+		base := strings.TrimSuffix(outPath, ext)
+		for i := 1; ; i++ {
+			p := fmt.Sprintf("%s_%d%s", base, i, ext)
+			if _, err := os.Stat(p); os.IsNotExist(err) {
+				outPath = p
+				break
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+
+	cmd := exec.Command(
+		"yt-dlp",
+		"-f", "bestaudio",
+		"--extract-audio",
+		"--audio-format", audioFormat,
+		"-o", outPath,
+		videoURL,
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("yt-dlp failed: %w", err)
+	}
+	return outPath, nil
 }
