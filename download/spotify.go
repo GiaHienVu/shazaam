@@ -1,7 +1,6 @@
 package download
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -34,10 +33,21 @@ import (
 // 14.- pagination
 // 15.- proccessItems
 
+// Main Function : + getSongMetadata( url String) ([] Track) ( SPOTIFY)
+/*
+	.GetSongMetadata(url String) ([] track)
+		- AccessToken
+		- SEND REQUEST (url String) ([] Track)
+
+
+
+*/
 const (
 	tokenURL        = "https://accounts.spotify.com/api/token"
 	cachedTokenPath = "token.json"
 	trackPath       = "path.json"
+	trackURLSpotify = "https://api.spotify.com/v1/tracks/%s"
+	albumURLSpotify = "https://api.spotify.com/v1/albums/%s/tracks"
 )
 
 type Track struct {
@@ -79,6 +89,35 @@ func LoadEnv() {
 	}
 	log.Println(cred)
 
+}
+
+func getTracksMetadata(url string) ([]Track, error) {
+	var (
+		reSpotifyTrack = regexp.MustCompile(`open\.spotify\.com\/(?:intl-.+\/)?track\/([a-zA-Z0-9]{22})(\?si=[a-zA-Z0-9]{16})?`)
+		reSpotifyAlbum = regexp.MustCompile(`open\.spotify\.com\/album\/([a-zA-Z0-9]{22})`)
+	)
+	matches := reSpotifyTrack.FindStringSubmatch(url)
+	if matches != nil || len(matches) >= 2 {
+		trackId := matches[1]
+		endpoint := fmt.Sprintf(trackURLSpotify, trackId)
+		body, err := request(endpoint)
+		if err != nil {
+			return nil, err
+		}
+		return getTrackInfoFromBody(body)
+	}
+
+	matches = reSpotifyAlbum.FindStringSubmatch(url)
+	if matches != nil || len(matches) >= 2 {
+		trackId := matches[1]
+		endpoint := fmt.Sprintf(albumURLSpotify, trackId)
+		body, err := request(endpoint)
+		if err != nil {
+			return nil, err
+		}
+		return getAlbumInfoFromBody(body) // hoặc AlbumInfo(body)
+	}
+	return nil, fmt.Errorf("URL does not match any Spotify URL")
 }
 
 // LoadCreds -->  Save Token -->
@@ -180,49 +219,37 @@ func LoadCachedToken() (string, error) {
 	return ct.Token, nil
 }
 
-func request(endpoint string) (int, string, error) {
+func request(endpoint string) ([]byte, error) {
 	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
-		return 0, "", fmt.Errorf("error on making the request")
+		return nil, fmt.Errorf("error on making the request")
 	}
 
 	bearer, err := AccessToken()
 	if err != nil {
-		return 0, "", fmt.Errorf("failed to get access token: %w", err)
+		return nil, fmt.Errorf("failed to get access token: %w", err)
 	}
-	fmt.Println(bearer)
 	req.Header.Add("Authorization", "Bearer "+bearer)
 
 	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
-		return 0, "", fmt.Errorf("error on getting response: %w", err)
+		return nil, fmt.Errorf("do request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, "", fmt.Errorf("error on reading response: %w", err)
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("read body failed: %w", readErr)
 	}
-	return resp.StatusCode, string(body), nil
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		fmt.Printf("HTTP error: %s\nBody: %s\n", resp.Status, string(body))
+		return nil, fmt.Errorf("http error: %s", resp.Status)
+	}
+	return body, nil
 }
 
-func TrackInfo(url string) (*Track, error) {
-	re := regexp.MustCompile(`open\.spotify\.com\/(?:intl-.+\/)?track\/([a-zA-Z0-9]{22})(\?si=[a-zA-Z0-9]{16})?`)
-	matches := re.FindStringSubmatch(url)
-	if len(matches) <= 2 {
-		return nil, errors.New("invalid track URL")
-	}
-	id := matches[1]
-
-	endpoint := fmt.Sprintf("https://api.spotify.com/v1/tracks/%s", id)
-	statusCode, jsonResponse, err := request(endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("error getting track info: %w", err)
-	}
-	if statusCode != 200 {
-		return nil, fmt.Errorf("non-200 status code: %d", statusCode)
-	}
-
+func getTrackInfoFromBody(body []byte) ([]Track, error) {
 	var result struct {
 		Name     string `json:"name"`
 		Duration int    `json:"duration_ms"`
@@ -233,14 +260,7 @@ func TrackInfo(url string) (*Track, error) {
 			Name string `json:"name"`
 		} `json:"artists"`
 	}
-
-	//var pretty bytes.Buffer
-	//if err := json.Indent(&pretty, []byte(jsonResponse), "", "  "); err != nil {
-	//	fmt.Println(jsonResponse) // fallback nếu JSON lỗi
-	//} else {
-	//	fmt.Println(pretty.String())
-	//}
-	if err := json.Unmarshal([]byte(jsonResponse), &result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, err
 	}
 
@@ -248,16 +268,59 @@ func TrackInfo(url string) (*Track, error) {
 	for _, a := range result.Artists {
 		allArtists = append(allArtists, a.Name)
 	}
+	mainArtist := ""
+	if len(allArtists) > 0 {
+		mainArtist = allArtists[0]
+	}
 	track := (&Track{
 		Title:    result.Name,
-		Artist:   allArtists[0],
+		Artist:   mainArtist,
 		Artists:  allArtists,
 		Album:    result.Album.Name,
 		Duration: result.Duration / 1000,
 	}).buildTrack()
 	//saveTracksJSON(trackPath, track)
-	return track, nil
+	return []Track{*track}, nil
 }
+
+func getAlbumInfoFromBody(body []byte) ([]Track, error) {
+	var result struct {
+		Items []struct {
+			Name     string `json:"name"`
+			Duration int    `json:"duration_ms"`
+			Artists  []struct {
+				Name string `json:"name"`
+			} `json:"artists"`
+		} `json:"items"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+
+	var tracks []Track
+	for _, item := range result.Items {
+		var artists []string
+		for _, artist := range item.Artists {
+			artists = append(artists, artist.Name)
+		}
+
+		mainArtist := ""
+		if len(artists) > 0 {
+			mainArtist = artists[0]
+		}
+		tracks = append(tracks, *(&Track{
+			Title:    item.Name,
+			Artist:   mainArtist,
+			Artists:  artists,
+			Duration: item.Duration / 1000,
+			Album:    "",
+		}).buildTrack())
+	}
+
+	return tracks, nil
+}
+
 func (t *Track) buildTrack() *Track {
 	track := &Track{
 		Title:    t.Title,
@@ -270,83 +333,34 @@ func (t *Track) buildTrack() *Track {
 	return track
 }
 
-func PlayListInfo(url string) ([]Track, error) {
-	re := regexp.MustCompile(`open\.download\.com\/(?:intl-[a-zA-Z-]+\/)?playlist\/([a-zA-Z0-9]{22})(?:\?si=[a-zA-Z0-9]+)?`)
-	matches := re.FindStringSubmatch(url)
-	if len(matches) != 2 {
-		return nil, errors.New("invalid playlist URL")
-	}
-	id := matches[1]
-	fmt.Println(id)
-	//var tracks []Track
-	//offset := 0
-	//limit := 100
-	endpoint := fmt.Sprintf("https://api.spotify.com/v1/playlists/%s", id)
-	statusCode, jsonResponse, err := request(endpoint)
-
-	if err != nil {
-		return nil, fmt.Errorf("request error: %w", err)
-	}
-	if statusCode != 200 {
-		return nil, fmt.Errorf("non-200 status: %d body=%s", statusCode, jsonResponse)
-	}
-	var pretty bytes.Buffer
-	if err := json.Indent(&pretty, []byte(jsonResponse), "", "  "); err != nil {
-		fmt.Println(jsonResponse) // fallback nếu JSON lỗi
-	} else {
-		fmt.Println(pretty.String())
-	}
-	return nil, nil
-}
-
-func AlbumInfo(url string) ([]Track, error) {
-	re := regexp.MustCompile(`open\.spotify\.com\/album\/([a-zA-Z0-9]{22})`)
-	matches := re.FindStringSubmatch(url)
-	if len(matches) != 2 {
-		return nil, errors.New("invalid album URL")
-	}
-	id := matches[1]
-
-	endpoint := fmt.Sprintf("https://api.spotify.com/v1/albums/%s/tracks", id)
-	statusCode, jsonResponse, err := request(endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("request error: %w", err)
-	}
-	if statusCode != 200 {
-		return nil, fmt.Errorf("non-200 status: %d body=%s", statusCode, jsonResponse)
-	}
-	var result struct {
-		Items []struct {
-			Name     string `json:"name"`
-			Duration int    `json:"duration_ms"`
-			Artist   []struct {
-				Name string `json:"name"`
-			} `json:"artists"`
-		}
-	}
-
-	if err := json.Unmarshal([]byte(jsonResponse), &result); err != nil {
-		return nil, err
-	}
-
-	var tracks []Track
-	for _, item := range result.Items {
-		var artists []string
-		for _, artist := range item.Artist {
-			artists = append(artists, artist.Name)
-		}
-		tracks = append(tracks, *(&Track{
-			Title:    item.Name,
-			Artist:   artists[0],
-			Artists:  artists,
-			Duration: item.Duration / 1000,
-			Album:    "",
-		}).buildTrack())
-	}
-	appendTracksJSONArray(trackPath, tracks)
-
-	return nil, nil
-}
+//func PlayListInfo(url string) ([]Track, error) {
+//	re := regexp.MustCompile(`open\.download\.com\/(?:intl-[a-zA-Z-]+\/)?playlist\/([a-zA-Z0-9]{22})(?:\?si=[a-zA-Z0-9]+)?`)
+//	matches := re.FindStringSubmatch(url)
+//	if len(matches) != 2 {
+//		return nil, errors.New("invalid playlist URL")
+//	}
+//	id := matches[1]
+//	fmt.Println(id)
+//	//var tracks []Track
+//	//offset := 0
+//	//limit := 100
+//	endpoint := fmt.Sprintf("https://api.spotify.com/v1/playlists/%s", id)
+//	statusCode, jsonResponse, err := request(endpoint)
+//
+//	if err != nil {
+//		return nil, fmt.Errorf("request error: %w", err)
+//	}
+//	if statusCode != 200 {
+//		return nil, fmt.Errorf("non-200 status: %d body=%s", statusCode, jsonResponse)
+//	}
+//	var pretty bytes.Buffer
+//	if err := json.Indent(&pretty, []byte(jsonResponse), "", "  "); err != nil {
+//		fmt.Println(jsonResponse) // fallback nếu JSON lỗi
+//	} else {
+//		fmt.Println(pretty.String())
+//	}
+//	return nil, nil
+//}
 
 func appendTracksJSONArray(path string, newTracks []Track) error {
 	// đọc file nếu có
@@ -372,3 +386,14 @@ func appendTracksJSONArray(path string, newTracks []Track) error {
 	enc.SetIndent("", "  ")
 	return enc.Encode(tracks)
 }
+
+//matches := re.FindStringSubmatch(url)
+//if len(matches) != 2 {
+//return nil, errors.New("invalid album URL")
+//}
+//id := matches[1]
+//
+//if len(matches) <= 2 {
+//return nil, errors.New("invalid track URL")
+//}
+//id := matches[1]
