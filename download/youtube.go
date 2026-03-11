@@ -3,9 +3,7 @@ package download
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -32,8 +30,40 @@ Output: file mp3
 //			}
 //		} `json:"items"`
 //	}
-const durationMatchThreshold = 5
-const audioFormat = "wav"
+
+const (
+	durationMatchThreshold = 5
+	audioFormat            = "wav"
+	limit                  = 10
+)
+
+func FindYoutubeUrl(tracks []Track) []Track {
+	for i := range tracks {
+		track := &tracks[i]
+		if track.Artists[0] == "" || track.Title == "" {
+			fmt.Println("Song title or artist name is blank")
+			break
+		}
+		query := track.Artists[0] + " " + track.Title
+		videoIds, err := GetYoutubeURL(query)
+		if err != nil {
+			fmt.Printf("Something goes wrong: %v\n", err)
+			break
+		}
+		result, err := FetchVideosContentDetails(strings.Join(videoIds, ","))
+		if err != nil {
+			fmt.Printf("Something goes wrong: %v\n", err)
+			break
+		}
+		finalURL, err := filterResultWithDuration(result, track.Duration)
+		if err != nil {
+			fmt.Printf("Something goes wrong: %v\n", err)
+			break
+		}
+		track.YoutubeURL = finalURL
+	}
+	return tracks
+}
 
 type MetadataSongYoutube struct {
 	Title      string
@@ -59,19 +89,15 @@ type ytVideosResp struct {
 	} `json:"items"`
 }
 
-func GetYoutubeURL(track Track) error {
+func GetYoutubeURL(query string) ([]string, error) {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found or failed to load")
 	}
 	key := os.Getenv("YOUTUBE_APIKEY")
 	if key == "" {
-		return fmt.Errorf("Key is blank")
+		return nil, fmt.Errorf("key is blank")
 	}
-	if track.Artists[0] == "" || track.Title == "" {
-		return fmt.Errorf("Song title or artist name is blank")
-	}
-	query := track.Artists[0] + " " + track.Title
-	limit := 10
+
 	endpoint := fmt.Sprintf(
 		"https://www.googleapis.com/youtube/v3/search?part=id&type=video&videoCategoryId=10&maxResults=%d&key=%s&q=%s",
 		limit,
@@ -79,118 +105,54 @@ func GetYoutubeURL(track Track) error {
 		url.QueryEscape(query),
 	)
 
-	req, err := http.NewRequest("GET", endpoint, nil)
+	body, err := requestYoutube(endpoint)
 	if err != nil {
-		return fmt.Errorf("error on making the request")
+		return nil, err
 	}
-
-	resp, err := (&http.Client{}).Do(req)
-	if err != nil {
-		return fmt.Errorf("error on getting response: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("youtube search failed: status=%d body=%s", resp.StatusCode, "")
-	}
-	body, err := io.ReadAll(resp.Body) // <-- body lấy ở đây
-	if err != nil {
-		return err
-	}
-
-	videoIDs := ExtractVideoIDsFromSearchResponse(body)
-	if err != nil {
-		return err
-	}
-
-	_, videoIDsWithDuration, _ := FetchVideosContentDetails(key, videoIDs)
-	//fmt.Println(videoIDsWithDuration)
-	fmt.Println("Hello")
-	songDuration := track.Duration
-	allowedDurationRangeStart := songDuration - durationMatchThreshold // FIX: tính 1 lần
-	allowedDurationRangeEnd := songDuration + durationMatchThreshold
-	for _, item := range videoIDsWithDuration.Items {
-		resultSongDuration, err := parseISO8601DurationSeconds(item.ContentDetails.Duration) // FIX: duration là ISO8601 (PT3M45S)
-		if err != nil {
-			continue
-		}
-		if resultSongDuration >= allowedDurationRangeStart && resultSongDuration <= allowedDurationRangeEnd {
-			fmt.Println("INFO: ", fmt.Sprintf("Found song with id '%s'", item.ID))
-			track.YoutubeURL = "https://www.youtube.com/watch?v=" + item.ID
-			break
-		}
-	}
-	url12, _ := DownloadAudio(track.YoutubeURL)
-	fmt.Println(url12)
-	return fmt.Errorf("No song founded: %w", err)
-
+	return ExtractVideoIDsFromSearchResponse(body), nil
 }
 
 func ExtractVideoIDsFromSearchResponse(body []byte) []string {
-	var r SearchYoutubeResult
-	if err := json.Unmarshal(body, &r); err != nil {
+	var result SearchYoutubeResult
+	if err := json.Unmarshal(body, &result); err != nil {
 		return nil
 	}
 
-	ids := make([]string, 0, len(r.Items))
-	for _, it := range r.Items {
-		if it.ID.VideoID != "" {
-			ids = append(ids, it.ID.VideoID)
+	ids := make([]string, 0, len(result.Items))
+	for _, item := range result.Items {
+		if item.ID.VideoID != "" {
+			ids = append(ids, item.ID.VideoID)
 		}
 	}
 	return ids
 }
 
-func FetchVideosContentDetails(apiKey string, videoIDs []string) (int, ytVideosResp, error) {
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		return 0, ytVideosResp{}, fmt.Errorf("api key is blank")
+func FetchVideosContentDetails(query string) (ytVideosResp, error) {
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found or failed to load")
 	}
-	if len(videoIDs) == 0 {
-		return 0, ytVideosResp{}, fmt.Errorf("videoIDs is empty")
+	key := os.Getenv("YOUTUBE_APIKEY")
+	if key == "" {
+		return ytVideosResp{}, fmt.Errorf("Key is blank")
 	}
 
-	u := &url.URL{
-		Scheme: "https",
-		Host:   "www.googleapis.com",
-		Path:   "/youtube/v3/videos",
-	}
-	q := url.Values{}
-	q.Set("part", "contentDetails")
-	q.Set("key", apiKey)
-	q.Set("id", strings.Join(videoIDs, ","))
-	u.RawQuery = q.Encode()
-	endpoint := u.String()
+	endpoint := fmt.Sprintf(
+		"https://www.googleapis.com/youtube/v3/videos?part=contentDetails&key=%s&id=%s",
+		key,
+		url.QueryEscape(query),
+	)
 
-	req, err := http.NewRequest("GET", endpoint, nil)
+	body, err := requestYoutube(endpoint)
 	if err != nil {
-		return 0, ytVideosResp{}, fmt.Errorf("make request: %w", err)
+		return ytVideosResp{}, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0, ytVideosResp{}, fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, ytVideosResp{}, fmt.Errorf("read body: %w", err)
+	var result ytVideosResp
+	if err := json.Unmarshal(body, &result); err != nil {
+		return ytVideosResp{}, fmt.Errorf("unmarshal json: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return resp.StatusCode, ytVideosResp{}, fmt.Errorf(
-			"youtube videos.list failed: status=%d body=%s",
-			resp.StatusCode, string(body),
-		)
-	}
-
-	var out ytVideosResp
-	if err := json.Unmarshal(body, &out); err != nil {
-		return resp.StatusCode, ytVideosResp{}, fmt.Errorf("unmarshal json: %w", err)
-	}
-
-	return resp.StatusCode, out, nil
+	return result, nil
 }
 
 func parseISO8601DurationSeconds(s string) (int, error) {
@@ -215,6 +177,22 @@ func parseISO8601DurationSeconds(s string) (int, error) {
 	min := toInt(m[2])
 	sec := toInt(m[3])
 	return h*3600 + min*60 + sec, nil
+}
+
+func filterResultWithDuration(result ytVideosResp, duration int) (string, error) {
+	allowedDurationRangeStart := duration - durationMatchThreshold // FIX: tính 1 lần
+	allowedDurationRangeEnd := duration + durationMatchThreshold
+	for _, item := range result.Items {
+		resultSongDuration, err := parseISO8601DurationSeconds(item.ContentDetails.Duration) // FIX: duration là ISO8601 (PT3M45S)
+		if err != nil {
+			continue
+		}
+		if resultSongDuration >= allowedDurationRangeStart && resultSongDuration <= allowedDurationRangeEnd {
+			fmt.Println("INFO: ", fmt.Sprintf("Found song with id '%s'", item.ID))
+			return "https://www.youtube.com/watch?v=" + item.ID, nil
+		}
+	}
+	return "", fmt.Errorf("Cant find youtube URL")
 }
 
 func DownloadAudio(videoURL string) (string, error) {
