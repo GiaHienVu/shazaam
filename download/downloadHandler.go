@@ -7,3 +7,11 @@ package download
 CONVERT track ---> videoURL []String
 + DownloadYoutubeAudio ( videoURL []string) ( [] string)
 */
+
+func downloadWAV(url string) error {
+	tracks, err := getTracksMetadata(url)
+	if err != nil {
+		return nil
+	}
+
+}

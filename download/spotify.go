@@ -21,7 +21,7 @@ import (
 // 2.- saveToken
 // 3.- loadCachedToken
 // 4.- accessToken
-// 5.- request
+// 5.- requestSpotify
 // 6.- getID
 // 7.- isValidPattern
 // 8.- TrackInfo
@@ -99,23 +99,13 @@ func getTracksMetadata(url string) ([]Track, error) {
 	matches := reSpotifyTrack.FindStringSubmatch(url)
 	if matches != nil || len(matches) >= 2 {
 		trackId := matches[1]
-		endpoint := fmt.Sprintf(trackURLSpotify, trackId)
-		body, err := request(endpoint)
-		if err != nil {
-			return nil, err
-		}
-		return getTrackInfoFromBody(body)
+		return getTrackInfo(trackId)
 	}
 
 	matches = reSpotifyAlbum.FindStringSubmatch(url)
 	if matches != nil || len(matches) >= 2 {
-		trackId := matches[1]
-		endpoint := fmt.Sprintf(albumURLSpotify, trackId)
-		body, err := request(endpoint)
-		if err != nil {
-			return nil, err
-		}
-		return getAlbumInfoFromBody(body) // hoặc AlbumInfo(body)
+		trackIds := matches[1]
+		return getAlbumInfoFromBody(trackIds) // hoặc AlbumInfo(body)
 	}
 	return nil, fmt.Errorf("URL does not match any Spotify URL")
 }
@@ -185,7 +175,7 @@ func getTokenFromAPI() (tokenResponse, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return tokenResponse{}, fmt.Errorf("token request failed: status=%d body=%s", resp.StatusCode, string(body))
+		return tokenResponse{}, fmt.Errorf("token requestSpotify failed: status=%d body=%s", resp.StatusCode, string(body))
 	}
 	var tr tokenResponse
 	if err := json.Unmarshal(body, &tr); err != nil {
@@ -219,37 +209,13 @@ func LoadCachedToken() (string, error) {
 	return ct.Token, nil
 }
 
-func request(endpoint string) ([]byte, error) {
-	req, err := http.NewRequest("GET", endpoint, nil)
+func getTrackInfo(trackId string) ([]Track, error) {
+	endpoint := fmt.Sprintf(trackURLSpotify, trackId)
+	body, err := requestSpotify(endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("error on making the request")
+		return nil, err
 	}
 
-	bearer, err := AccessToken()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get access token: %w", err)
-	}
-	req.Header.Add("Authorization", "Bearer "+bearer)
-
-	resp, err := (&http.Client{}).Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("do request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, readErr := io.ReadAll(resp.Body)
-	if readErr != nil {
-		return nil, fmt.Errorf("read body failed: %w", readErr)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		fmt.Printf("HTTP error: %s\nBody: %s\n", resp.Status, string(body))
-		return nil, fmt.Errorf("http error: %s", resp.Status)
-	}
-	return body, nil
-}
-
-func getTrackInfoFromBody(body []byte) ([]Track, error) {
 	var result struct {
 		Name     string `json:"name"`
 		Duration int    `json:"duration_ms"`
@@ -283,7 +249,13 @@ func getTrackInfoFromBody(body []byte) ([]Track, error) {
 	return []Track{*track}, nil
 }
 
-func getAlbumInfoFromBody(body []byte) ([]Track, error) {
+func getAlbumInfoFromBody(trackId string) ([]Track, error) {
+	endpoint := fmt.Sprintf(trackURLSpotify, trackId)
+	body, err := requestSpotify(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
 	var result struct {
 		Items []struct {
 			Name     string `json:"name"`
@@ -345,10 +317,10 @@ func (t *Track) buildTrack() *Track {
 //	//offset := 0
 //	//limit := 100
 //	endpoint := fmt.Sprintf("https://api.spotify.com/v1/playlists/%s", id)
-//	statusCode, jsonResponse, err := request(endpoint)
+//	statusCode, jsonResponse, err := requestSpotify(endpoint)
 //
 //	if err != nil {
-//		return nil, fmt.Errorf("request error: %w", err)
+//		return nil, fmt.Errorf("requestSpotify error: %w", err)
 //	}
 //	if statusCode != 200 {
 //		return nil, fmt.Errorf("non-200 status: %d body=%s", statusCode, jsonResponse)

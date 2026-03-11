@@ -181,32 +181,6 @@ func LoadCachedToken() (string, error) {
 	return ct.Token, nil
 }
 
-func request(endpoint string) (int, string, error) {
-	req, err := http.NewRequest("GET", endpoint, nil)
-	if err != nil {
-		return 0, "", fmt.Errorf("error on making the request")
-	}
-
-	bearer, err := AccessToken()
-	if err != nil {
-		return 0, "", fmt.Errorf("failed to get access token: %w", err)
-	}
-	fmt.Println(bearer)
-	req.Header.Add("Authorization", "Bearer "+bearer)
-
-	resp, err := (&http.Client{}).Do(req)
-	if err != nil {
-		return 0, "", fmt.Errorf("error on getting response: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, "", fmt.Errorf("error on reading response: %w", err)
-	}
-	return resp.StatusCode, string(body), nil
-}
-
 func TrackInfo(url string) (*Track, error) {
 	re := regexp.MustCompile(`open\.download\.com\/(?:intl-.+\/)?track\/([a-zA-Z0-9]{22})(\?si=[a-zA-Z0-9]{16})?`)
 	matches := re.FindStringSubmatch(url)
